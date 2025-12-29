@@ -13,54 +13,59 @@ app.get('/proxy', async (req, res) => {
     }
 
     try {
-        console.log(`Attempting to fetch: ${url}`);
-        
-        // 1. "Super Stealth" Headers to mimic a real VLC/Web Player
+        // 1. Fetch the playlist with the "Stealth" headers
         const response = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 10000, // Wait 10 seconds before giving up
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
                 'Referer': 'http://king4k.tv/',
-                'Origin': 'http://king4k.tv',
-                'Host': 'king4k.tv' // This sometimes tricks the server
+                'Origin': 'http://king4k.tv'
             }
         });
 
         const contentType = response.headers['content-type'];
-        console.log(`Success! Content-Type: ${contentType}`);
-
+        
+        // 2. Identify if this is a Playlist (.m3u8)
         if ((contentType && contentType.includes('mpegurl')) || url.includes('.m3u8')) {
+            console.log(`Processing Playlist: ${url}`);
+            
             let m3u8Content = response.data.toString('utf8');
-            
-            const currentHost = req.get('host');
-            const protocol = req.protocol;
-            const baseUrl = `${protocol}://${currentHost}/proxy?url=`;
-            
-            m3u8Content = m3u8Content.replace(/(http:\/\/[^\s]+)/g, (match) => {
-                return baseUrl + encodeURIComponent(match);
+            const lines = m3u8Content.split('\n');
+            const proxyBase = `${req.protocol}://${req.get('host')}/proxy?url=`;
+
+            // 3. Process the file LINE BY LINE (The Fix for 404s)
+            const modifiedLines = lines.map(line => {
+                const trimmed = line.trim();
+                
+                // If the line is empty or a comment, leave it alone
+                if (!trimmed || trimmed.startsWith('#')) {
+                    return line;
+                }
+
+                // It is a link (chunk or sub-playlist). We must make it absolute.
+                try {
+                    // This magic line resolves "shortcuts" (relative paths) against the original URL
+                    const absoluteUrl = new URL(trimmed, url).href;
+                    return proxyBase + encodeURIComponent(absoluteUrl);
+                } catch (e) {
+                    return line; // If it fails, leave it alone
+                }
             });
 
+            const finalContent = modifiedLines.join('\n');
+
             res.set('Content-Type', 'application/vnd.apple.mpegurl');
-            res.send(m3u8Content);
+            res.send(finalContent);
+            
         } else {
+            // 4. It is a video chunk (.ts) - Just pass it through
             if (contentType) res.set('Content-Type', contentType);
             res.send(response.data);
         }
 
     } catch (error) {
-        // Log the specific error to help us debug
-        if (error.code === 'ECONNRESET') {
-             console.error("BLOCKED: The provider hung up (ECONNRESET). They are blocking Render IPs.");
-        } else if (error.response) {
-            console.error("Provider Error:", error.response.status, error.response.statusText);
-        } else {
-            console.error("Proxy Error:", error.message);
-        }
-        res.status(500).send('Error fetching stream.');
+        console.error("Proxy Error:", error.message);
+        res.status(500).send('Error fetching stream');
     }
 });
 
