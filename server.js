@@ -3,6 +3,7 @@ const axios = require('axios');
 const cors = require('cors');
 const app = express();
 
+// Enable CORS for everyone
 app.use(cors());
 
 app.get('/proxy', async (req, res) => {
@@ -13,7 +14,7 @@ app.get('/proxy', async (req, res) => {
     }
 
     try {
-        // 1. Fetch the playlist with the "Stealth" headers
+        // 1. Fetch the playlist with "Stealth" headers
         const response = await axios.get(url, {
             responseType: 'arraybuffer',
             headers: {
@@ -31,24 +32,26 @@ app.get('/proxy', async (req, res) => {
             
             let m3u8Content = response.data.toString('utf8');
             const lines = m3u8Content.split('\n');
-            const proxyBase = `${req.protocol}://${req.get('host')}/proxy?url=`;
+            
+            // --- THE FIX IS HERE ---
+            // We force 'https' because Render requires it.
+            // We also use req.get('host') to get the correct Render URL.
+            const proxyBase = `https://${req.get('host')}/proxy?url=`;
 
-            // 3. Process the file LINE BY LINE (The Fix for 404s)
+            // 3. Process the file LINE BY LINE
             const modifiedLines = lines.map(line => {
                 const trimmed = line.trim();
                 
-                // If the line is empty or a comment, leave it alone
                 if (!trimmed || trimmed.startsWith('#')) {
                     return line;
                 }
 
-                // It is a link (chunk or sub-playlist). We must make it absolute.
                 try {
-                    // This magic line resolves "shortcuts" (relative paths) against the original URL
+                    // Resolve relative paths (shortcuts) to full URLs
                     const absoluteUrl = new URL(trimmed, url).href;
                     return proxyBase + encodeURIComponent(absoluteUrl);
                 } catch (e) {
-                    return line; // If it fails, leave it alone
+                    return line; 
                 }
             });
 
@@ -58,7 +61,7 @@ app.get('/proxy', async (req, res) => {
             res.send(finalContent);
             
         } else {
-            // 4. It is a video chunk (.ts) - Just pass it through
+            // 4. It is a video chunk (.ts)
             if (contentType) res.set('Content-Type', contentType);
             res.send(response.data);
         }
